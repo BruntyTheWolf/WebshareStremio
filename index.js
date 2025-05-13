@@ -5,7 +5,7 @@ const crypto = require("crypto");
 
 const manifest = {
   id: "community.webshare",
-  version: "1.0.1",
+  version: "1.0.0",
   name: "Webshare CZ",
   description: "Streamování z Webshare přes Stremio",
   catalogs: [],
@@ -58,9 +58,6 @@ async function login() {
 
     WS_TOKEN = loginRes.data.token;
     console.log("[Login] Webshare login successful.");
-    console.log(WS_USER);
-    console.log(encryptedPass);
-    console.log(digest);
   } catch (err) {
     console.error("[Login] Login error:", err.response?.data || err.message);
   }
@@ -140,6 +137,43 @@ function generateSearchVariants(title, year) {
   return [...parts].filter(Boolean);
 }
 
+async function trySearchVariants(variants, sort) {
+  for (const variant of variants) {
+    console.log(`[Webshare] Searching for variant: ${variant} (sort: ${sort})`);
+    try {
+      const res = await axios.post(API + "search/", {
+        what: variant,
+        wst: WS_TOKEN,
+        category: "video",
+        sort: sort,
+        maybe_removed: "true",
+        lang: "",
+        limit: 50,
+        offset: 0,
+      });
+      const files = res.data.file || [];
+      if (files.length) {
+        console.log(
+          `[Webshare] Found ${files.length} results for variant "${variant}" with sort "${sort}"`
+        );
+        return files.map((file) => ({
+          title: `${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(
+            2
+          )} GB)`,
+          url: `${BASE}/file/${file.ident}/download`,
+          behaviorHints: { notWebReady: false },
+        }));
+      }
+    } catch (err) {
+      console.error(
+        `[Webshare] Search error for "${variant}" (sort: ${sort}):`,
+        err.response?.data || err.message
+      );
+    }
+  }
+  return [];
+}
+
 async function getStreamUrl(imdbId) {
   if (!WS_TOKEN) await login();
 
@@ -153,40 +187,13 @@ async function getStreamUrl(imdbId) {
     const variants = generateSearchVariants(title, year);
     console.log(`[Search] Variants for title "${title}":`, variants);
 
-    for (const variant of variants) {
-      console.log(`[Webshare] Searching for variant: ${variant}`);
-      try {
-        const res = await axios.post(API + "search/", {
-          what: variant,
-          wst: WS_TOKEN,
-          category: "video",
-          sort: "rating",
-          maybe_removed: "true",
-          lang: "",
-          limit: 50,
-          offset: 0,
-        });
+    let streams = await trySearchVariants(variants, "rating");
+    if (streams.length === 0)
+      streams = await trySearchVariants(variants, "time_created");
+    if (streams.length === 0)
+      streams = await trySearchVariants(variants, "size");
 
-        const files = res.data.file || [];
-        if (files.length) {
-          console.log(
-            `[Webshare] Found ${files.length} results for variant "${variant}"`
-          );
-          return files.map((file) => ({
-            title: `${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(
-              2
-            )} GB)`,
-            url: `${BASE}/file/${file.ident}/download`,
-            behaviorHints: { notWebReady: false },
-          }));
-        }
-      } catch (err) {
-        console.error(
-          `[Webshare] Search error for "${variant}":`,
-          err.response?.data || err.message
-        );
-      }
-    }
+    if (streams.length) return streams;
   }
 
   console.warn("[Webshare] No results found for any title.");
