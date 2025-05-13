@@ -128,7 +128,7 @@ async function getStreamUrl(imdbId) {
         sort: "rating",
         maybe_removed: "true",
         lang: "",
-        limit: 10,
+        limit: 50,
         offset: 0,
       });
 
@@ -136,7 +136,9 @@ async function getStreamUrl(imdbId) {
       if (files.length) {
         console.log(`[Webshare] Found ${files.length} results for "${title}"`);
         const streams = files.map((file) => ({
-          title: `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`,
+          title: `${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(
+            2
+          )} GB)`,
           url: `${BASE}/file/${file.ident}/download`,
           behaviorHints: { notWebReady: false },
         }));
