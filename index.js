@@ -1,7 +1,16 @@
 // stremio-webshare-addon/index.js
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
-const axios = require("axios");
+const axiosBase = require("axios");
 const crypto = require("crypto");
+
+const axios = axiosBase.create({
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/81.0.4044.138 Safari/537.36",
+    Referer: "https://webshare.cz",
+  },
+  withCredentials: true,
+});
 
 const manifest = {
   id: "community.webshare",
