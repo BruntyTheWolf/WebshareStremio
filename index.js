@@ -96,15 +96,18 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
 module.exports = builder.getInterface();
 
-const http = require("http");
+const { getInterface } = builder;
 
-http
+const interface = getInterface();
+
+require("http")
   .createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Stremio Webshare addon is running 🦊\\n");
+    interface(req, res); // Tohle zpracovává požadavky jako /manifest.json, /stream/...
   })
-  .listen(7000, () => {
+  .listen(process.env.PORT || 7000, () => {
     console.log(
-      "✅ Addon interface running at http://localhost:7000/manifest.json"
+      `✅ Addon interface running at http://localhost:${
+        process.env.PORT || 7000
+      }/manifest.json`
     );
   });
