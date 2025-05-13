@@ -21,6 +21,7 @@ const API = BASE + "/api/";
 
 const WS_USER = process.env.WS_USER || "luciehormandlova";
 const WS_PASS = process.env.WS_PASS || "castren1990";
+const TMDB_KEY = process.env.TMDB_KEY || "7fdf98a51f538346596a513b967b058b"; // ZDE ZADEJ SVŮJ SKUTEČNÝ KLÍČ!
 
 let WS_TOKEN = null;
 
@@ -60,11 +61,32 @@ async function login() {
   }
 }
 
+async function getTitleFromImdb(imdbId) {
+  try {
+    const res = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
+      params: {
+        api_key: TMDB_KEY,
+        external_source: "imdb_id",
+      },
+    });
+
+    const movie = res.data.movie_results?.[0];
+    return movie?.title || null;
+  } catch (err) {
+    console.error("TMDb fetch error:", err.response?.data || err.message);
+    return null;
+  }
+}
+
 async function getStreamUrl(imdbId) {
   if (!WS_TOKEN) await login();
+
+  const title = await getTitleFromImdb(imdbId);
+  if (!title) return [];
+
   try {
     const searchRes = await axios.post(API + "search/", {
-      what: imdbId,
+      what: title,
       wst: WS_TOKEN,
       category: "video",
       sort: "rating",
@@ -73,13 +95,11 @@ async function getStreamUrl(imdbId) {
     });
 
     const files = searchRes.data.file || [];
-    const streams = files.map((file) => {
-      return {
-        title: `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`,
-        url: `${BASE}/file/${file.ident}/download`,
-        behaviorHints: { notWebReady: false },
-      };
-    });
+    const streams = files.map((file) => ({
+      title: `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`,
+      url: `${BASE}/file/${file.ident}/download`,
+      behaviorHints: { notWebReady: false },
+    }));
 
     return streams;
   } catch (err) {
