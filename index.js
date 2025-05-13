@@ -1,8 +1,9 @@
-// stremio-webshare-addon/index.js
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axiosBase = require("axios");
 const crypto = require("crypto");
+const xml2js = require("xml2js");
 
+// HTTP client
 const axios = axiosBase.create({
   headers: {
     "User-Agent":
@@ -10,11 +11,25 @@ const axios = axiosBase.create({
     Referer: "https://webshare.cz",
   },
   withCredentials: true,
+  responseType: "text",
 });
 
+// Helper to send form data
+function postForm(url, data) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined && value !== null)
+      params.append(key, String(value));
+  }
+  return axios.post(url, params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+}
+
+// Manifest
 const manifest = {
   id: "community.webshare",
-  version: "1.0.0",
+  version: "1.0.2",
   name: "Webshare CZ",
   description: "Streamování z Webshare přes Stremio",
   catalogs: [],
@@ -22,197 +37,141 @@ const manifest = {
   types: ["movie"],
   idPrefixes: ["tt"],
 };
-
 const builder = new addonBuilder(manifest);
 
+// Config
 const BASE = "https://webshare.cz";
 const API = BASE + "/api/";
-
 const WS_USER = process.env.WS_USER || "luciehormandlova";
 const WS_PASS = process.env.WS_PASS || "castren1990";
 const TMDB_KEY = process.env.TMDB_KEY || "7fdf98a51f538346596a513b967b058b";
 
 let WS_TOKEN = null;
+const xmlParser = new xml2js.Parser({
+  explicitArray: false,
+  explicitRoot: false,
+});
 
+// Login
 async function login() {
   console.log("[Login] Logging in to Webshare...");
-  try {
-    const saltRes = await axios.post(API + "salt/", {
-      username_or_email: WS_USER,
-    });
-    const salt = saltRes.data.salt;
-
-    const md5crypt = (pass, salt) => {
-      return crypto
-        .createHash("md5")
-        .update(pass + salt)
-        .digest("hex");
-    };
-
-    const encryptedPass = crypto
-      .createHash("sha1")
-      .update(md5crypt(WS_PASS, salt))
-      .digest("hex");
-    const digest = crypto
+  const saltRes = await postForm(API + "salt/", { username_or_email: WS_USER });
+  const { salt } = await xmlParser.parseStringPromise(saltRes.data);
+  const md5crypt = (p, s) =>
+    crypto
       .createHash("md5")
-      .update(Buffer.from(`${WS_USER}:Webshare:${encryptedPass}`))
+      .update(p + s)
       .digest("hex");
-
-    const loginRes = await axios.post(API + "login/", {
-      username_or_email: WS_USER,
-      password: encryptedPass,
-      digest: digest,
-      keep_logged_in: 1,
-    });
-
-    WS_TOKEN = loginRes.data.token;
-    console.log("[Login] Webshare login successful.");
-  } catch (err) {
-    console.error("[Login] Login error:", err.response?.data || err.message);
-  }
+  const encrypted = crypto
+    .createHash("sha1")
+    .update(md5crypt(WS_PASS, salt))
+    .digest("hex");
+  const digest = crypto
+    .createHash("md5")
+    .update(Buffer.from(`${WS_USER}:Webshare:${encrypted}`))
+    .digest("hex");
+  const loginRes = await postForm(API + "login/", {
+    username_or_email: WS_USER,
+    password: encrypted,
+    digest,
+    keep_logged_in: 1,
+  });
+  const { token } = await xmlParser.parseStringPromise(loginRes.data);
+  WS_TOKEN = token;
+  console.log("[Login] Successful, token set.");
 }
 
+// TMDb titles
 async function getTitlesFromImdb(imdbId) {
-  console.log(`[TMDb] Looking up titles for IMDb ID: ${imdbId}`);
-  try {
-    const res = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
-      params: {
-        api_key: TMDB_KEY,
-        external_source: "imdb_id",
-      },
-    });
-
-    const movie = res.data.movie_results?.[0];
-    if (!movie) {
-      console.warn("[TMDb] No movie found for IMDb ID:", imdbId);
-      return [];
-    }
-
-    const titles = new Set();
-    if (movie.title) titles.add(movie.title);
-    if (movie.original_title) titles.add(movie.original_title);
-
-    const altRes = await axios.get(
-      `https://api.themoviedb.org/3/movie/${movie.id}/alternative_titles`,
-      {
-        params: { api_key: TMDB_KEY },
-      }
-    );
-
-    const altTitles = altRes.data.titles || [];
-    altTitles.forEach((t) => {
-      if (["CZ", "US"].includes(t.iso_3166_1) && t.title) {
-        titles.add(t.title);
-      }
-    });
-
-    const year = movie.release_date?.split("-")[0] || "";
-    console.log(
-      `[TMDb] Filtered titles (EN/CZ only): ${Array.from(titles).join(
-        ", "
-      )}, year: ${year}`
-    );
-    return { titles: Array.from(titles), year };
-  } catch (err) {
-    console.error(
-      "[TMDb] Error fetching titles:",
-      err.response?.data || err.message
-    );
-    return { titles: [], year: "" };
-  }
+  const res = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
+    params: { api_key: TMDB_KEY, external_source: "imdb_id" },
+    responseType: "json",
+  });
+  const movie = res.data.movie_results?.[0];
+  if (!movie) return { titles: [], year: "" };
+  const titles = new Set([movie.title, movie.original_title]);
+  const alt = await axios.get(
+    `https://api.themoviedb.org/3/movie/${movie.id}/alternative_titles`,
+    { params: { api_key: TMDB_KEY }, responseType: "json" }
+  );
+  alt.data.titles.forEach((t) => {
+    if (["CZ", "US"].includes(t.iso_3166_1)) titles.add(t.title);
+  });
+  return { titles: [...titles], year: movie.release_date?.split("-")[0] || "" };
 }
 
+// Variants
 function generateSearchVariants(title, year) {
-  const norm = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const base = norm.replace(/[^a-zA-Z0-9 ]/g, "").trim();
+  const norm = title.normalize("NFD").replace(/\p{M}/gu, "");
+  const base = norm.replace(/[^\w ]/g, "").trim();
   const compact = base.replace(/\s+/g, "");
-  const parts = new Set([
-    title,
-    norm,
-    norm.toLowerCase(),
-    base,
-    base.toLowerCase(),
-    `${base} ${year}`,
-    compact,
-    `${compact}${year}`,
-    `${compact}.${year}`,
-    `${compact}.avi`,
-    `${compact}.mp4`,
-    `${compact}.mkv`,
-    `${base.replace(/\s+/g, ".")} ${year}`,
-    `${base.replace(/\s+/g, "-")}${year}`,
-    `${base.replace(/\s+/g, "_")}${year}`,
-  ]);
-  return [...parts].filter(Boolean);
+  return [
+    ...new Set([
+      base,
+      base + ` ${year}`,
+      compact,
+      compact + year,
+      `${compact}.${year}`,
+      compact + ".mp4",
+      compact + ".mkv",
+      compact + ".avi",
+    ]),
+  ];
 }
 
+// Search
 async function trySearchVariants(variants, sort) {
-  for (const variant of variants) {
-    console.log(`[Webshare] Searching for variant: ${variant} (sort: ${sort})`);
-    try {
-      const res = await axios.post(API + "search/", {
-        what: variant,
-        wst: WS_TOKEN,
-        category: "video",
-        sort: sort,
-        maybe_removed: "true",
-        lang: "",
-        limit: 50,
-        offset: 0,
+  for (const v of variants) {
+    console.log(`[Webshare] Searching: '${v}' sort=${sort}`);
+    const res = await postForm(API + "search/", {
+      what: v,
+      wst: WS_TOKEN,
+      category: "video",
+      sort,
+      maybe_removed: "true",
+      lang: "",
+      limit: 50,
+      offset: 0,
+    });
+    const xml = await xmlParser.parseStringPromise(res.data);
+    if (xml.status === "OK" && xml.file) {
+      let files = Array.isArray(xml.file) ? xml.file : [xml.file];
+      console.log(`[Webshare] Got ${files.length} files for '${v}'`);
+      const seen = new Set();
+      const unique = files.filter((f) => {
+        if (seen.has(f.ident)) return false;
+        seen.add(f.ident);
+        return true;
       });
-      const files = res.data.file || [];
-      if (files.length) {
-        console.log(
-          `[Webshare] Found ${files.length} results for variant "${variant}" with sort "${sort}"`
-        );
-        return files.map((file) => ({
-          title: `${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(
-            2
-          )} GB)`,
-          url: `${BASE}/file/${file.ident}/download`,
-          behaviorHints: { notWebReady: false },
-        }));
-      }
-    } catch (err) {
-      console.error(
-        `[Webshare] Search error for "${variant}" (sort: ${sort}):`,
-        err.response?.data || err.message
-      );
+      return unique.map((f) => ({
+        title: `${f.name} (${(+f.size / 1024 / 1024 / 1024).toFixed(2)} GB)`,
+        url: `${BASE}/file/${f.ident}/download`,
+        behaviorHints: { notWebReady: false },
+      }));
     }
   }
   return [];
 }
 
+// Main getStream
 async function getStreamUrl(imdbId) {
   if (!WS_TOKEN) await login();
-
   const { titles, year } = await getTitlesFromImdb(imdbId);
-  if (!titles.length) {
-    console.warn("[Webshare] No titles to search for IMDb ID:", imdbId);
-    return [];
+  for (const t of titles) {
+    const variants = generateSearchVariants(t, year);
+    for (const sort of ["rating", "time_created", "size"]) {
+      const streams = await trySearchVariants(variants, sort);
+      if (streams.length) return streams;
+    }
   }
-
-  for (const title of titles) {
-    const variants = generateSearchVariants(title, year);
-    console.log(`[Search] Variants for title "${title}":`, variants);
-
-    let streams = await trySearchVariants(variants, "rating");
-    if (streams.length === 0)
-      streams = await trySearchVariants(variants, "time_created");
-    if (streams.length === 0)
-      streams = await trySearchVariants(variants, "size");
-
-    if (streams.length) return streams;
-  }
-
-  console.warn("[Webshare] No results found for any title.");
   return [];
 }
 
+// Handler
 builder.defineStreamHandler(async ({ type, id }) => {
-  console.log(`[Stremio] Incoming stream request: type=${type}, id=${id}`);
+  console.log(`[Stremio] Stream request type=${type}, id=${id}`);
   const streams = await getStreamUrl(id);
-  console.log(`[Stremio] Returning ${streams.length} stream(s)`);
+  console.log(`[Stremio] Returning ${streams.length}`);
   return { streams };
 });
 
