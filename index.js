@@ -1,5 +1,5 @@
 // stremio-webshare-addon/index.js
-const { addonBuilder } = require("stremio-addon-sdk");
+const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 const crypto = require("crypto");
 
@@ -32,7 +32,6 @@ async function login() {
     const salt = saltRes.data.salt;
 
     const md5crypt = (pass, salt) => {
-      // Zde můžeš nahradit knihovnou md5crypt, pokud chceš větší přesnost
       return crypto
         .createHash("md5")
         .update(pass + salt)
@@ -94,20 +93,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
   return { streams };
 });
 
-module.exports = builder.getInterface();
-
-const { getInterface } = builder;
-
-const interface = getInterface();
-
-require("http")
-  .createServer((req, res) => {
-    interface(req, res); // Tohle zpracovává požadavky jako /manifest.json, /stream/...
-  })
-  .listen(process.env.PORT || 7000, () => {
-    console.log(
-      `✅ Addon interface running at http://localhost:${
-        process.env.PORT || 7000
-      }/manifest.json`
-    );
-  });
+serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
