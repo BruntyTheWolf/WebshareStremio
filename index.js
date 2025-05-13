@@ -5,7 +5,7 @@ const crypto = require("crypto");
 
 const manifest = {
   id: "community.webshare",
-  version: "1.0.0",
+  version: "1.0.1",
   name: "Webshare CZ",
   description: "Streamování z Webshare přes Stremio",
   catalogs: [],
@@ -58,6 +58,9 @@ async function login() {
 
     WS_TOKEN = loginRes.data.token;
     console.log("[Login] Webshare login successful.");
+    console.log(WS_USER);
+    console.log(encryptedPass);
+    console.log(digest);
   } catch (err) {
     console.error("[Login] Login error:", err.response?.data || err.message);
   }
@@ -97,59 +100,92 @@ async function getTitlesFromImdb(imdbId) {
       }
     });
 
-    const filtered = Array.from(titles);
-    console.log(`[TMDb] Filtered titles (EN/CZ only): ${filtered.join(", ")}`);
-    return filtered;
+    const year = movie.release_date?.split("-")[0] || "";
+    console.log(
+      `[TMDb] Filtered titles (EN/CZ only): ${Array.from(titles).join(
+        ", "
+      )}, year: ${year}`
+    );
+    return { titles: Array.from(titles), year };
   } catch (err) {
     console.error(
       "[TMDb] Error fetching titles:",
       err.response?.data || err.message
     );
-    return [];
+    return { titles: [], year: "" };
   }
+}
+
+function generateSearchVariants(title, year) {
+  const norm = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const base = norm.replace(/[^a-zA-Z0-9 ]/g, "").trim();
+  const compact = base.replace(/\s+/g, "");
+  const parts = new Set([
+    title,
+    norm,
+    norm.toLowerCase(),
+    base,
+    base.toLowerCase(),
+    `${base} ${year}`,
+    compact,
+    `${compact}${year}`,
+    `${compact}.${year}`,
+    `${compact}.avi`,
+    `${compact}.mp4`,
+    `${compact}.mkv`,
+    `${base.replace(/\s+/g, ".")} ${year}`,
+    `${base.replace(/\s+/g, "-")}${year}`,
+    `${base.replace(/\s+/g, "_")}${year}`,
+  ]);
+  return [...parts].filter(Boolean);
 }
 
 async function getStreamUrl(imdbId) {
   if (!WS_TOKEN) await login();
 
-  const titles = await getTitlesFromImdb(imdbId);
+  const { titles, year } = await getTitlesFromImdb(imdbId);
   if (!titles.length) {
     console.warn("[Webshare] No titles to search for IMDb ID:", imdbId);
     return [];
   }
 
   for (const title of titles) {
-    console.log(`[Webshare] Searching for title: ${title}`);
-    try {
-      const searchRes = await axios.post(API + "search/", {
-        what: title,
-        wst: WS_TOKEN,
-        category: "video",
-        sort: "rating",
-        maybe_removed: "true",
-        lang: "",
-        limit: 50,
-        offset: 0,
-      });
+    const variants = generateSearchVariants(title, year);
+    console.log(`[Search] Variants for title "${title}":`, variants);
 
-      const files = searchRes.data.file || [];
-      if (files.length) {
-        console.log(`[Webshare] Found ${files.length} results for "${title}"`);
-        const streams = files.map((file) => ({
-          title: `${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(
-            2
-          )} GB)`,
-          url: `${BASE}/file/${file.ident}/download`,
-          behaviorHints: { notWebReady: false },
-        }));
+    for (const variant of variants) {
+      console.log(`[Webshare] Searching for variant: ${variant}`);
+      try {
+        const res = await axios.post(API + "search/", {
+          what: variant,
+          wst: WS_TOKEN,
+          category: "video",
+          sort: "rating",
+          maybe_removed: "true",
+          lang: "",
+          limit: 50,
+          offset: 0,
+        });
 
-        return streams;
+        const files = res.data.file || [];
+        if (files.length) {
+          console.log(
+            `[Webshare] Found ${files.length} results for variant "${variant}"`
+          );
+          return files.map((file) => ({
+            title: `${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(
+              2
+            )} GB)`,
+            url: `${BASE}/file/${file.ident}/download`,
+            behaviorHints: { notWebReady: false },
+          }));
+        }
+      } catch (err) {
+        console.error(
+          `[Webshare] Search error for "${variant}":`,
+          err.response?.data || err.message
+        );
       }
-    } catch (err) {
-      console.error(
-        `[Webshare] Error searching for title "${title}":`,
-        err.response?.data || err.message
-      );
     }
   }
 
