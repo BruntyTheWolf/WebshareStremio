@@ -1,7 +1,5 @@
 # WebshareStremio
 
-# WebshareStremio
-
 This is a Stremio plugin which allows you to watch videos from Webshare.cz.
 
 ## Installation
