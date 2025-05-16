@@ -1,26 +1,28 @@
 {
   "name": "stremioaddonwebshare",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "description": "This is a Stremio plugin which allows you to watch videos from Webshare.cz.",
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "axios": "^1.9.0",
-    "md5crypt": "^1.0.0",
-    "stremio-addon-sdk": "^1.6.10"
+  "homepage": "https://github.com/BruntyTheWolf/WebshareStremio#readme",
+  "bugs": {
+    "url": "https://github.com/BruntyTheWolf/WebshareStremio/issues"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BruntyTheWolf/WebshareStremio.git"
   },
-  "bugs": {
-    "url": "https://github.com/BruntyTheWolf/WebshareStremio/issues"
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
   },
-  "homepage": "https://github.com/BruntyTheWolf/WebshareStremio#readme"
+  "dependencies": {
+    "axios": "^1.9.0",
+    "md5crypt": "^1.0.0",
+    "stremio-addon-sdk": "^1.6.10",
+    "uuid": "^11.1.0",
+    "xml2js": "^0.6.2"
+  }
 }

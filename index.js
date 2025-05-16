@@ -1,8 +1,10 @@
-const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const { addonBuilder } = require("stremio-addon-sdk");
 const axiosBase = require("axios");
 const crypto = require("crypto");
 const xml2js = require("xml2js");
 const { v4: uuidv4 } = require("uuid");
+const http = require("http");
+const url = require("url");
 
 // HTTP client
 const axios = axiosBase.create({
@@ -15,7 +17,6 @@ const axios = axiosBase.create({
   responseType: "text",
 });
 
-// Helper to send form data
 function postForm(url, data) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(data)) {
@@ -27,7 +28,6 @@ function postForm(url, data) {
   });
 }
 
-// Manifest
 const manifest = {
   id: "community.webshare",
   version: "1.0.6",
@@ -40,7 +40,6 @@ const manifest = {
 };
 const builder = new addonBuilder(manifest);
 
-// Config
 const BASE = "https://webshare.cz";
 const API = BASE + "/api/";
 const WS_USER = process.env.WS_USER || "luciehormandlova";
@@ -54,7 +53,6 @@ const xmlParser = new xml2js.Parser({
   explicitRoot: false,
 });
 
-// Login implementation
 async function login() {
   console.log("[Login] Logging in to Webshare...");
   const saltRes = await postForm(API + "salt/", { username_or_email: WS_USER });
@@ -83,7 +81,6 @@ async function login() {
   console.log("[Login] Successful, token set.");
 }
 
-// Get file stream URL
 async function getLink(ident, dtype = "video_stream") {
   const res = await postForm(API + "file_link/", {
     ident,
@@ -99,7 +96,6 @@ async function getLink(ident, dtype = "video_stream") {
   return null;
 }
 
-// TMDb metadata
 async function getTitlesFromImdb(imdbId) {
   const res = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
     params: { api_key: TMDB_KEY, external_source: "imdb_id" },
@@ -121,7 +117,6 @@ async function getTitlesFromImdb(imdbId) {
   return { titles: [...titles], year: movie.release_date?.split("-")[0] || "" };
 }
 
-// Generate search strings
 function generateSearchVariants(title, year) {
   const norm = title.normalize("NFD").replace(/\p{M}/gu, "");
   const base = norm.replace(/[^\w ]/g, "").trim();
@@ -140,7 +135,6 @@ function generateSearchVariants(title, year) {
   ];
 }
 
-// Search Webshare
 async function trySearchVariants(variants, sort) {
   for (const v of variants) {
     console.log(`[Webshare] Searching: '${v}' sort=${sort}`);
@@ -171,7 +165,6 @@ async function trySearchVariants(variants, sort) {
   return [];
 }
 
-// Main stream retrieval
 async function getStreamItems(imdbId) {
   const { titles, year } = await getTitlesFromImdb(imdbId);
   for (const t of titles) {
@@ -184,10 +177,9 @@ async function getStreamItems(imdbId) {
   return [];
 }
 
-// Stream handler
 builder.defineStreamHandler(async ({ type, id }) => {
   console.log(`[Stremio] Stream request type=${type}, id=${id}`);
-  if (!WS_TOKEN) await login(); // ensure single login per session
+  if (!WS_TOKEN) await login();
   const items = await getStreamItems(id);
   const streams = [];
   for (const it of items) {
@@ -195,8 +187,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (link) {
       streams.push({
         title: it.title,
-        url: link,
-        headers: { Cookie: `wst=${WS_TOKEN}` },
+        url: `https://websharestremio.onrender.com/proxy?url=${encodeURIComponent(
+          link
+        )}`,
+        externalUrl: true,
         behaviorHints: { notWebReady: false },
       });
     }
@@ -205,5 +199,49 @@ builder.defineStreamHandler(async ({ type, id }) => {
   return { streams };
 });
 
-serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-builder.getInterface(), { port: process.env.PORT || 7000 };
+const server = http.createServer((req, res) => {
+  (async () => {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+
+    if (parsedUrl.pathname === "/proxy") {
+      const targetUrl = parsedUrl.searchParams.get("url");
+      if (!targetUrl || !WS_TOKEN) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        return res.end("Missing URL or not authenticated");
+      }
+
+      const response = await axios.get(targetUrl, {
+        headers: {
+          Cookie: `wst=${WS_TOKEN}`,
+          Referer: "https://webshare.cz",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        },
+        responseType: "stream",
+      });
+
+      res.writeHead(200, {
+        "Content-Type": response.headers["content-type"] || "video/mp4",
+        "Content-Length": response.headers["content-length"],
+        "Accept-Ranges": "bytes",
+      });
+
+      response.data.pipe(res);
+    } else {
+      const interfaceHandler = builder.getInterface
+        ? builder.getInterface()
+        : builder.getInterface;
+      interfaceHandler(req, res);
+    }
+  })().catch((err) => {
+    console.error("[Fatal error]", err);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      res.end("Unexpected server error");
+    }
+  });
+});
+
+const port = process.env.PORT || 7000;
+server.listen(port, () => {
+  console.log(`[Server] Listening on port ${port}`);
+});
